@@ -386,7 +386,7 @@ async def create_db_pool() -> aiomysql.Pool:
         raise
 
 
-async def save_report(pool: aiomysql.Pool, session_id: str, content: Dict[str, str]) -> bool:
+async def save_report(pool: aiomysql.Pool, session_id: str, user_id: str, content: Dict[str, str]) -> bool:
     """분석 리포트(제목, 요약)를 DB에 저장합니다."""
     try:
         async with pool.acquire() as conn:
@@ -397,8 +397,8 @@ async def save_report(pool: aiomysql.Pool, session_id: str, content: Dict[str, s
                 # content를 JSON 문자열로 저장
                 content_str = json.dumps(content, ensure_ascii=False)
                 
-                sql = "INSERT INTO reports (id, session_id, content, createdAt) VALUES (%s, %s, %s, %s)"
-                await cursor.execute(sql, (report_id, session_id, content_str, created_at))
+                sql = "INSERT INTO reports (id, session_id, user_id, content, created_at) VALUES (%s, %s, %s, %s, %s)"
+                await cursor.execute(sql, (report_id, session_id, user_id, content_str, created_at))
                 await conn.commit()
                 
                 print(f"Report saved: {report_id} for session {session_id}")
@@ -427,7 +427,7 @@ async def save_dementia_analysis(pool: aiomysql.Pool, session_id: str, user_id: 
                 
                 sql = """
                     INSERT INTO dementia_analysis 
-                    (id, session_id, user_id, risk_score, createdAt) 
+                    (id, session_id, user_id, risk_score, created_at) 
                     VALUES (%s, %s, %s, %s, %s)
                 """
                 await cursor.execute(sql, (analysis_id, session_id, user_id, risk_score, created_at))
@@ -464,7 +464,7 @@ async def save_emotion_analysis(pool: aiomysql.Pool, session_id: str, user_id: s
                 
                 sql = """
                     INSERT INTO emotion_analysis 
-                    (id, session_id, user_id, happy, sad, angry, surprised, bored, createdAt)
+                    (id, session_id, user_id, happy, sad, angry, surprised, bored, created_at)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """
                 values = (
@@ -559,7 +559,7 @@ async def main(request_json: Dict[str, Any]) -> Dict[str, Any]:
         save_tasks = []
         
         if not isinstance(summary_result, Exception):
-            save_tasks.append(('report', save_report(db_pool, session_id, summary_result)))
+            save_tasks.append(('report', save_report(db_pool, session_id, user_id, summary_result)))
         
         if not isinstance(dementia_result, Exception):
             save_tasks.append(('dementia', save_dementia_analysis(db_pool, session_id, user_id, dementia_result)))

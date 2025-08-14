@@ -1,0 +1,39 @@
+# Git and GitHub
+.git
+.gitignore
+.github/
+
+# Docker
+Dockerfile
+.dockerignore
+
+# IDE and editor configuration
+.idea/
+.vscode/
+.spyderproject
+.ropeproject
+
+# Python virtual environments and cache
+.venv/
+env/
+venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environment files
+.env
+.envrc
+
+# Documentation
+README.md
+.env.example
+
+# Database files (assuming schema is applied separately)
+schema.sql
+db.sqlite3
+
+# OS-specific
+.DS_Store
+Thumbs.db

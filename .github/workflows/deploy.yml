@@ -12,9 +12,6 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    
-    outputs:
-      image_uri: ${{ steps.push_image.outputs.image_uri }}
 
     steps:
       - name: Check out the repo
@@ -29,7 +26,7 @@ jobs:
         uses: 'google-github-actions/setup-gcloud@v2'
 
       - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker ${{ secrets.GCP_REGION }}-docker.pkg.dev
+        run: gcloud auth configure-docker ${{ secrets.GCP_REGION }}-docker.pkg.dev --quiet
 
       - name: Build and Push Docker Image
         id: push_image
@@ -37,7 +34,6 @@ jobs:
           IMAGE_URI="${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ secrets.ARTIFACT_REPO_NAME }}/alzheimer-analysis:latest"
           docker build -t $IMAGE_URI .
           docker push $IMAGE_URI
-          echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
 
   deploy:
     name: Deploy to Server
@@ -52,14 +48,16 @@ jobs:
           username: ${{ secrets.VM_SSH_USER }}
           key: ${{ secrets.VM_SSH_KEY }}
           script: |
+            IMAGE_URI="${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ secrets.ARTIFACT_REPO_NAME }}/alzheimer-analysis:latest"
+
             echo "Authenticating to Google Cloud on remote server..."
             echo '${{ secrets.GCP_SA_KEY }}' | gcloud auth activate-service-account --key-file=- --project=${{ secrets.GCP_PROJECT_ID }}
 
             echo "Configuring Docker for Artifact Registry..."
-            gcloud auth configure-docker ${{ secrets.GCP_REGION }}-docker.pkg.dev
+            gcloud auth configure-docker ${{ secrets.GCP_REGION }}-docker.pkg.dev --quiet
 
             echo "Pulling latest image from registry..."
-            docker pull ${{ needs.build-and-push.outputs.image_uri }}
+            docker pull $IMAGE_URI
 
             echo "Stopping and removing existing container..."
             docker stop alzheimer-analysis-container || true
@@ -80,4 +78,4 @@ jobs:
               -e DB_PASSWORD='${{ secrets.MYSQL_PASSWORD }}' \
               -e DB_NAME='${{ secrets.MYSQL_DATABASE }}' \
               -e DB_PORT='${{ secrets.MYSQL_PORT }}' \
-              ${{ needs.build-and-push.outputs.image_uri }}
+              $IMAGE_URI

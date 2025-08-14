@@ -4,7 +4,7 @@ import asyncio
 import aiohttp
 import uuid
 import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, request, jsonify
@@ -115,6 +115,113 @@ def generate_summary_sync(conversation_text: str) -> str:
         traceback.print_exc()
         raise
 
+async def get_previous_comprehensive_report(
+    pool: aiomysql.Pool,
+    user_id: str
+) -> Optional[Dict[str, Any]]:
+    """특정 사용자의 가장 최근 종합 보고서를 DB에서 조회합니다."""
+    sql = """
+        SELECT 
+            id, 
+            base_report_id, 
+            session_id, 
+            user_id, 
+            content, 
+            created_at
+        FROM reports
+        WHERE user_id = %s
+        ORDER BY created_at DESC
+        LIMIT 1
+    """
+    
+    try:
+        async with pool.acquire() as conn:
+            # 결과를 딕셔너리 형태로 받기 위해 aiomysql.DictCursor 사용
+            async with conn.cursor(aiomysql.DictCursor) as cursor:
+                await cursor.execute(sql, (user_id,))
+                result = await cursor.fetchone()
+                
+                if result:
+                    print(f"Found previous report for user {user_id}. Report ID: {result['id']}")
+                    return result
+                else:
+                    print(f"No previous report found for user {user_id}.")
+                    return None
+
+    except Exception as e:
+        print(f"Error fetching previous comprehensive report for user {user_id}: {e}")
+        traceback.print_exc()
+        return None
+    
+def generate_comprehensive_report_sync(
+    summary_data: Dict[str, str],
+    dementia_data: Dict[str, float],
+    emotion_data: Dict[str, float],
+    previous_report_data: Optional[Dict[str, Any]] # 이전 보고서 데이터 (없을 수 있음)
+) -> str:
+    """
+    '오늘 하루 요약'과 '변화 추이'를 포함하는 마크다운 형식의 종합 보고서를 생성합니다.
+    """
+    try:
+        # 1. 이전 보고서 데이터 처리
+        if previous_report_data:
+            previous_report_text = previous_report_data.get('content')
+        else:
+            previous_report_text = "이전 종합 보고서 기록이 없습니다. 첫 분석입니다."
+
+        # 2. 금일 분석 결과 텍스트 처리
+        dementia_risk = dementia_data.get('risk_score', -1.0)
+        dementia_assessment = f"{dementia_risk:.1%}" if dementia_risk >= 0 else "분석 실패"
+        
+        # 감정 데이터에서 가장 점수가 높은 감정을 찾거나, 전반적인 상태를 요약할 수 있습니다.
+        # 여기서는 간단히 모든 점수를 나열합니다.
+        emotion_scores_str = ", ".join(
+            [f"{k}: {v:.0%}" for k, v in emotion_data.items()]
+        ) if all(v >= 0 for v in emotion_data.values()) else "0.0"
+
+        # 프롬프트 구성
+        prompt = f"""당신은 시니어의 건강 상태 변화를 추적하고, 이전 분석 결과와 오늘 분석 결과를 비교하여 핵심적인 변화와 추이를 설명하는 전문 AI 헬스케어 리포터입니다.
+
+### 1. 이전 종합 보고서 요약
+---
+{previous_report_text}
+---
+
+### 2. 금일 대화 및 분석 결과
+- **대화 내용 요약**: {summary_data.get('summary', 'N/A')}
+- **인지 저하 위험도**: {dementia_assessment}
+- **주요 감정**: {emotion_scores_str}
+---
+
+### [미션]
+주어진 정보를 바탕으로, **'오늘 하루 요약'**과 **'이전 대비 변화 추이'** 두 부분으로 나누어 마크다운 보고서를 작성하세요. 아래 '출력 마크다운 형식 예시'의 구조를 반드시 따라주세요.
+
+### [제약 조건]
+- 한국어로 작성하세요.
+- 전체 내용은 **1000자 이내**로 작성하세요.
+- 별도의 인사나 부연 설명 없이 핵심 보고 내용만 바로 작성하세요.
+- **PlainText 형식**으로 출력하세요.
+"""
+
+        # --- Gemini API 호출 ---
+        model = GenerativeModel(model_name=GEMINI_MODEL_NAME)
+        
+        generation_config = GenerationConfig(
+            temperature=0.7,
+            max_output_tokens=2048
+        )
+
+        response = model.generate_content(prompt, generation_config=generation_config)
+        
+        if not response.candidates or not response.candidates[0].content.parts:
+            raise ValueError("Report content generation failed: Empty response from API.")
+            
+        return response.text
+
+    except Exception as e:
+        print(f"Error in generate_comprehensive_report_sync: {e}")
+        return None
+    
 async def get_summary_and_title(conversation: List[Dict[str, str]]) -> Dict[str, str]:
     """LLM(Gemini)을 사용하여 대화의 제목과 요약을 생성합니다."""
     try:
@@ -361,7 +468,6 @@ async def get_emotion_analysis(session: aiohttp.ClientSession, conversation: Lis
         traceback.print_exc()
         return {label: -1.0 for label in ["happy", "sad", "angry", "surprised", "bored"]}
 
-
 # --- 비동기 DB 저장 함수들 ---
 
 async def create_db_pool() -> aiomysql.Pool:
@@ -483,6 +589,59 @@ async def save_emotion_analysis(pool: aiomysql.Pool, session_id: str, user_id: s
         traceback.print_exc()
         return False
 
+async def save_comprehensive_report(
+    pool: aiomysql.Pool,
+    session_id: str,
+    user_id: str,
+    previous_report_id: Optional[str],
+    content: str,
+) -> Optional[str]:
+    """
+    생성된 종합 보고서를 DB에 저장합니다.
+    """
+    # 1. 새로 저장할 리포트의 고유 ID 생성
+    new_report_id = str(uuid.uuid4())
+    
+    # 2. 저장 시점의 UTC 시간을 ISO 8601 형식으로 생성
+    created_at = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+
+    # 3. SQL 쿼리 준비 (INSERT)
+    sql = """
+        INSERT INTO reports 
+        (id, base_report_id, session_id, user_id, content, created_at)
+        VALUES (%s, %s, %s, %s, %s, %s)
+    """
+    
+    # 4. 쿼리에 매핑할 값 준비
+    # previous_report_id는 이전 리포트의 id이며, 없을 경우 NULL로 저장됩니다.
+    values = (
+        new_report_id,
+        previous_report_id,
+        session_id,
+        user_id,
+        content,
+        created_at
+    )
+
+    try:
+        # content 생성에 실패한 경우 저장하지 않음
+        if content is None:
+            print("Skipping comprehensive report save due to all error values")
+            return False
+        
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cursor:
+
+                await cursor.execute(sql, values)
+                await conn.commit()
+                
+                print(f"Emotion analysis saved: {new_report_id} for session {session_id}")
+                return True
+                
+    except Exception as e:
+        print(f"Error saving emotion analysis: {e}")
+        traceback.print_exc()
+        return False
 
 # --- 메인 비동기 함수 ---
 
@@ -544,6 +703,13 @@ async def main(request_json: Dict[str, Any]) -> Dict[str, Any]:
         )
 
         summary_result, dementia_result, emotion_result = results
+        comprehensive_report = None
+        previous_report = None
+        try:
+            previous_report = await get_previous_comprehensive_report(db_pool, user_id)
+            comprehensive_report = generate_comprehensive_report_sync(summary_result, dementia_result, emotion_result, previous_report)
+        except Exception as e:
+            print('종합 보고서 생성 실패')
         
         # 결과 확인 및 처리
         for idx, (result, name) in enumerate(zip(results, ['summary', 'dementia', 'emotion'])):
@@ -551,8 +717,15 @@ async def main(request_json: Dict[str, Any]) -> Dict[str, Any]:
                 print(f"Analysis failed - {name}: {result}")
                 results_summary["analyses_failed"].append(name)
             else:
-                print(f"Analysis completed - {name}")
+                print(f"Analysis completed - {name} ")
                 results_summary["analyses_completed"].append(name)
+        # 종합 보고서 결과 처리
+        if isinstance(comprehensive_report, Exception) or comprehensive_report is None:
+                print(f"Analysis failed - comprehensive_report: {comprehensive_report}")
+                results_summary["analyses_failed"].append('comprehensive_report')
+        else:
+            print(f"Analysis completed - comprehensive_report ")
+            results_summary["analyses_completed"].append('comprehensive_report')
 
         # DB 저장 작업들
         print("Starting database save operations...")
@@ -566,6 +739,11 @@ async def main(request_json: Dict[str, Any]) -> Dict[str, Any]:
         
         if not isinstance(emotion_result, Exception):
             save_tasks.append(('emotion', save_emotion_analysis(db_pool, session_id, user_id, emotion_result)))
+
+        if not isinstance(comprehensive_report, Exception) and comprehensive_report is not None:
+            save_tasks.append(('comprehensive_report', save_comprehensive_report(db_pool, session_id, user_id, 
+                                                                                 previous_report.get("id") if previous_report is not None else None,
+                                                                                 comprehensive_report)))
 
         if save_tasks:
             save_names = [name for name, _ in save_tasks]

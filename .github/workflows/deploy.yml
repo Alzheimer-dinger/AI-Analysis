@@ -66,7 +66,7 @@ jobs:
             echo "Starting new container..."
             docker run -d \
               --name alzheimer-analysis-container \
-              -p 8080:8080 \
+              -p ${{ secrets.PORT }}:8080 \
               --restart always \
               -e GCP_PROJECT='${{ secrets.GCP_PROJECT_ID }}' \
               -e GCP_REGION='${{ secrets.GCP_REGION }}' \

@@ -63,11 +63,16 @@ jobs:
             docker stop alzheimer-analysis-container || true
             docker rm alzheimer-analysis-container || true
 
+            echo "Creating service account key file..."
+            echo '${{ secrets.GCP_SA_KEY }}' > /tmp/gcp-sa-key.json
+
             echo "Starting new container..."
             docker run -d \
               --name alzheimer-analysis-container \
               -p ${{ secrets.PORT }}:8080 \
               --restart always \
+              -v /tmp/gcp-sa-key.json:/app/gcp-sa-key.json:ro \
+              -e GOOGLE_APPLICATION_CREDENTIALS=/app/gcp-sa-key.json \
               -e GCP_PROJECT='${{ secrets.GCP_PROJECT_ID }}' \
               -e GCP_REGION='${{ secrets.GCP_REGION }}' \
               -e DEMENTIA_ANALYSIS_ENDPOINT_ID='${{ secrets.DEMENTIA_ANALYSIS_ENDPOINT_ID }}' \

@@ -220,10 +220,19 @@ async def get_summary_and_title(conversation: List[Dict[str, str]]) -> Dict[str,
 async def get_dementia_analysis(session: aiohttp.ClientSession, audio_url: str) -> Dict[str, float]:
     """Vertex AI Endpoint로 치매 위험도를 분석하고 risk_score를 계산합니다."""
     try:
-        # 인증 토큰 획득
-        creds, project = google.auth.default()
+        # 인증 토큰 획득 (스코프 포함)
+        creds, project = google.auth.default(
+            scopes=['https://www.googleapis.com/auth/cloud-platform']
+        )
         auth_req = google.auth.transport.requests.Request()
         creds.refresh(auth_req)
+        
+        # 인증 정보 로깅 (디버깅용)
+        print(f"Authentication successful: project={project}, token_type={type(creds.token)}")
+        if hasattr(creds, 'service_account_email'):
+            print(f"Service account: {creds.service_account_email}")
+        else:
+            print("Using default credentials (not service account)")
         
         endpoint_url = f"https://{LOCATION}-aiplatform.googleapis.com/v1/projects/{PROJECT_ID}/locations/{LOCATION}/endpoints/{DEMENTIA_ANALYSIS_ENDPOINT_ID}:predict"
         

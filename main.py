@@ -7,6 +7,7 @@ import datetime
 from typing import Dict, Any, List
 import traceback
 from concurrent.futures import ThreadPoolExecutor
+from flask import Flask, request, jsonify
 
 # .env 환경변수 로딩 (로컬 실행 시)
 if __name__ == "__main__":
@@ -33,7 +34,7 @@ DEMENTIA_ANALYSIS_ENDPOINT_ID = os.environ.get("DEMENTIA_ANALYSIS_ENDPOINT_ID")
 GEMINI_MODEL_NAME = os.environ.get("GEMINI_MODEL_NAME", "gemini-2.0-flash-exp")
 
 # Hugging Face Inference API
-HF_API_URL = os.environ.get("HF_ZERO_SHOT_API_URL", "https://api-inference.huggingface.co/models/MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7")
+HF_API_URL = os.environ.get("HF_ZERO_SHOT_API_URL", "https://router.huggingface.co/hf-inference/models/MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7")
 HF_TOKEN = os.environ.get("HF_TOKEN")
 
 # MySQL Database
@@ -660,16 +661,14 @@ def analyze_conversation_session(request):
             'request_id': request_id
         }, 500)
 
+app = Flask(__name__)
+
+@app.route("/analyze", methods=["POST"])
+def analyze():
+    # Flask request를 Cloud Function 진입점에 전달
+    result, status = analyze_conversation_session(request)
+    return jsonify(result), status
+
 if __name__ == "__main__":
     # 로컬 테스트용
-    from flask import Flask, request, jsonify
-
-    app = Flask(__name__)
-
-    @app.route("/analyze", methods=["POST"])
-    def analyze():
-        # Flask request를 Cloud Function 진입점에 전달
-        result, status = analyze_conversation_session(request)
-        return jsonify(result), status
-
     app.run(host="0.0.0.0", port=8080)

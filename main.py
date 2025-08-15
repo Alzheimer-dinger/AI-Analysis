@@ -49,9 +49,23 @@ API_TIMEOUT_SECONDS = 120  # Vertex AI 엔드포인트는 처리 시간이 더 �
 DB_TIMEOUT_SECONDS = 10
 
 # Vertex AI 전역 초기화 (한 번만 실행)
-if PROJECT_ID and LOCATION:
-    vertexai.init(project=PROJECT_ID, location=LOCATION)
+def init_vertex_ai():
+    """Vertex AI 초기화 - 환경변수 기반 credential 지원"""
+    credentials_json = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+    if credentials_json:
+        from google.oauth2 import service_account
+        credentials_info = json.loads(credentials_json)
+        creds = service_account.Credentials.from_service_account_info(
+            credentials_info,
+            scopes=['https://www.googleapis.com/auth/cloud-platform']
+        )
+        vertexai.init(project=PROJECT_ID, location=LOCATION, credentials=creds)
+    else:
+        vertexai.init(project=PROJECT_ID, location=LOCATION)
     print(f"Vertex AI initialized: project={PROJECT_ID}, location={LOCATION}")
+
+if PROJECT_ID and LOCATION:
+    init_vertex_ai()
 
 # ThreadPoolExecutor를 전역으로 생성 (재사용)
 executor = ThreadPoolExecutor(max_workers=3)
@@ -328,9 +342,22 @@ async def get_dementia_analysis(session: aiohttp.ClientSession, audio_url: str) 
     """Vertex AI Endpoint로 치매 위험도를 분석하고 risk_score를 계산합니다."""
     try:
         # 인증 토큰 획득 (스코프 포함)
-        creds, project = google.auth.default(
-            scopes=['https://www.googleapis.com/auth/cloud-platform']
-        )
+        credentials_json = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+        if credentials_json:
+            # 환경변수에서 JSON 자격증명 직접 사용
+            import io
+            from google.oauth2 import service_account
+            credentials_info = json.loads(credentials_json)
+            creds = service_account.Credentials.from_service_account_info(
+                credentials_info,
+                scopes=['https://www.googleapis.com/auth/cloud-platform']
+            )
+            project = credentials_info.get('project_id', PROJECT_ID)
+        else:
+            # 기존 방식 (파일 기반)
+            creds, project = google.auth.default(
+                scopes=['https://www.googleapis.com/auth/cloud-platform']
+            )
         auth_req = google.auth.transport.requests.Request()
         creds.refresh(auth_req)
         

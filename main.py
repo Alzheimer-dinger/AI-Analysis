@@ -560,29 +560,6 @@ async def create_mongodb_client():
         raise
 
 
-async def save_report(pool: aiomysql.Pool, session_id: str, user_id: str, content: Dict[str, str]) -> bool:
-    """분석 리포트(제목, 요약)를 DB에 저장합니다."""
-    try:
-        async with pool.acquire() as conn:
-            async with conn.cursor() as cursor:
-                report_id = str(uuid.uuid4())
-                created_at = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-                
-                # content를 JSON 문자열로 저장
-                content_str = json.dumps(content, ensure_ascii=False)
-                
-                sql = "INSERT INTO reports (id, session_id, user_id, content, created_at) VALUES (%s, %s, %s, %s, %s)"
-                await cursor.execute(sql, (report_id, session_id, user_id, content_str, created_at))
-                await conn.commit()
-                
-                logger.info(f"Report saved: {report_id} for session {session_id}")
-                return True
-                
-    except Exception as e:
-        logger.error(f"Error saving report: {e}")
-        traceback.print_exc()
-        return False
-
 async def save_analysis_report_to_mongodb(
     mongodb_client, 
     session_id: str,
@@ -843,7 +820,7 @@ async def main(request_json: Dict[str, Any]) -> Dict[str, Any]:
         save_tasks = []
         
         if not isinstance(summary_result, Exception):
-            save_tasks.append(('report', save_report(db_pool, session_id, user_id, summary_result)))
+            save_tasks.append(('mongodb_analysis_report', save_analysis_report_to_mongodb(mongodb_client, session_id, summary_result.get('title', '대화 기록'), summary_result.get('summary', '대화 내용이 분석되었습니다.'))))
         
         if not isinstance(dementia_result, Exception):
             save_tasks.append(('dementia', save_dementia_analysis(db_pool, session_id, user_id, dementia_result)))
@@ -871,28 +848,6 @@ async def main(request_json: Dict[str, Any]) -> Dict[str, Any]:
                 else:
                     results_summary["db_saves_completed"].append(name)
 
-        # MongoDB에 분석 리포트 저장 (title과 content 추가)
-        if mongodb_client and session_id and not isinstance(summary_result, Exception):
-            try:
-                title = summary_result.get('title', '대화 기록')
-                content = summary_result.get('summary', '대화 내용이 분석되었습니다.')
-                
-                mongodb_save_result = await save_analysis_report_to_mongodb(
-                    mongodb_client, 
-                    session_id,
-                    title, 
-                    content
-                )
-                
-                if mongodb_save_result:
-                    results_summary["db_saves_completed"].append("mongodb_analysis_report")
-                    logger.info(f"Analysis report saved to MongoDB session: {session_id}")
-                else:
-                    results_summary["db_saves_failed"].append("mongodb_analysis_report")
-                    
-            except Exception as e:
-                logger.error(f"MongoDB analysis report save failed: {e}")
-                results_summary["db_saves_failed"].append("mongodb_analysis_report")
 
         logger.info(f"Processing completed for session {session_id}")
         return results_summary

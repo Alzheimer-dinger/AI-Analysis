@@ -585,29 +585,18 @@ async def save_report(pool: aiomysql.Pool, session_id: str, user_id: str, conten
 
 async def save_analysis_report_to_mongodb(
     mongodb_client, 
-    document_id: str,
+    session_id: str,
     title: str, 
     content: str
 ) -> bool:
-    """MongoDB에 분석 리포트를 저장합니다. _id 기준으로 문서를 찾아서 title과 content 필드를 추가합니다."""
+    """MongoDB에 분석 리포트를 저장합니다. session_id 기준으로 문서를 찾아서 title과 content 필드를 추가합니다."""
     try:
-        from bson import ObjectId
-        
         db = mongodb_client[MONGODB_DB_NAME]
-        collection = db.conversation_sessions
+        collection = db.transcripts
         
-        # ObjectId 변환 시도
-        try:
-            object_id = ObjectId(document_id)
-            query_id = object_id
-        except Exception:
-            # ObjectId 변환 실패 시 문자열 그대로 사용
-            query_id = document_id
-            logger.info(f"Using document_id as string: {document_id}")
-        
-        # _id 기준으로 문서 업데이트
+        # session_id 기준으로 문서 업데이트
         result = await collection.update_one(
-            {"_id": query_id},
+            {"session_id": session_id},
             {
                 "$set": {
                     "title": title,
@@ -618,10 +607,10 @@ async def save_analysis_report_to_mongodb(
         )
         
         if result.matched_count > 0:
-            logger.info(f"Analysis report added to MongoDB document: {document_id}")
+            logger.info(f"Analysis report added to MongoDB session: {session_id}")
             return True
         else:
-            logger.warning(f"Document not found in MongoDB: {document_id}")
+            logger.warning(f"Session not found in MongoDB: {session_id}")
             return False
         
     except Exception as e:
@@ -883,21 +872,21 @@ async def main(request_json: Dict[str, Any]) -> Dict[str, Any]:
                     results_summary["db_saves_completed"].append(name)
 
         # MongoDB에 분석 리포트 저장 (title과 content 추가)
-        if mongodb_client and document_id and not isinstance(summary_result, Exception):
+        if mongodb_client and session_id and not isinstance(summary_result, Exception):
             try:
                 title = summary_result.get('title', '대화 기록')
                 content = summary_result.get('summary', '대화 내용이 분석되었습니다.')
                 
                 mongodb_save_result = await save_analysis_report_to_mongodb(
                     mongodb_client, 
-                    document_id,
+                    session_id,
                     title, 
                     content
                 )
                 
                 if mongodb_save_result:
                     results_summary["db_saves_completed"].append("mongodb_analysis_report")
-                    logger.info(f"Analysis report saved to MongoDB document: {document_id}")
+                    logger.info(f"Analysis report saved to MongoDB session: {session_id}")
                 else:
                     results_summary["db_saves_failed"].append("mongodb_analysis_report")
                     

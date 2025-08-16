@@ -79,4 +79,6 @@ jobs:
               -e DB_PASSWORD='${{ secrets.MYSQL_PASSWORD }}' \
               -e DB_NAME='${{ secrets.MYSQL_DATABASE }}' \
               -e DB_PORT='${{ secrets.MYSQL_PORT }}' \
+              -e MONGO_CONNECTION_STRING='${{ secrets.MONGO_CONNECTION_STRING }}' \
+              -e MONGO_DATABASE='${{ secrets.MONGO_DATABASE }}' \
               $IMAGE_URI

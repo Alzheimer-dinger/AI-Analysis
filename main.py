@@ -23,6 +23,8 @@ import google.auth.transport.requests
 
 # Database Connector (async)
 import aiomysql
+from motor.motor_asyncio import AsyncIOMotorClient
+import pymongo
 
 # --- 환경 변수 로드 (Cloud Function 환경 변수 또는 Secret Manager에 설정) ---
 # Google Cloud
@@ -43,6 +45,10 @@ DB_PASSWORD = os.environ.get("DB_PASSWORD")
 DB_HOST = os.environ.get("DB_HOST")
 DB_NAME = os.environ.get("DB_NAME")
 DB_PORT = int(os.environ.get("DB_PORT", 3306))
+
+# MongoDB Database
+MONGODB_URI = os.environ.get("MONGO_CONNECTION_STRING")
+MONGODB_DB_NAME = os.environ.get("MONGO_DATABASE")
 
 # 타임아웃 설정
 API_TIMEOUT_SECONDS = 120  # Vertex AI 엔드포인트는 처리 시간이 더 길 수 있음
@@ -527,6 +533,21 @@ async def create_db_pool() -> aiomysql.Pool:
         print(f"Failed to create database pool: {e}")
         raise
 
+async def create_mongodb_client():
+    """MongoDB 클라이언트 생성"""
+    try:
+        if not MONGODB_URI:
+            raise ValueError("MONGO_CONNECTION_STRING environment variable is required")
+        
+        client = AsyncIOMotorClient(MONGODB_URI)
+        # 연결 테스트
+        await client.admin.command('ping')
+        print(f"MongoDB client created successfully: {MONGODB_DB_NAME}")
+        return client
+    except Exception as e:
+        print(f"Failed to create MongoDB client: {e}")
+        raise
+
 
 async def save_report(pool: aiomysql.Pool, session_id: str, user_id: str, content: Dict[str, str]) -> bool:
     """분석 리포트(제목, 요약)를 DB에 저장합니다."""
@@ -548,6 +569,41 @@ async def save_report(pool: aiomysql.Pool, session_id: str, user_id: str, conten
                 
     except Exception as e:
         print(f"Error saving report: {e}")
+        traceback.print_exc()
+        return False
+
+async def save_analysis_report_to_mongodb(
+    mongodb_client, 
+    document_id: str,
+    title: str, 
+    content: str
+) -> bool:
+    """MongoDB에 분석 리포트를 저장합니다. _id 기준으로 문서를 찾아서 title과 content 필드를 추가합니다."""
+    try:
+        db = mongodb_client[MONGODB_DB_NAME]
+        collection = db.conversation_sessions
+        
+        # _id 기준으로 문서 업데이트
+        result = await collection.update_one(
+            {"_id": document_id},
+            {
+                "$set": {
+                    "title": title,
+                    "content": content,
+                    "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
+                }
+            }
+        )
+        
+        if result.matched_count > 0:
+            print(f"Analysis report added to MongoDB document: {document_id}")
+            return True
+        else:
+            print(f"Document not found in MongoDB: {document_id}")
+            return False
+        
+    except Exception as e:
+        print(f"Error saving analysis report to MongoDB: {e}")
         traceback.print_exc()
         return False
 
@@ -684,8 +740,11 @@ async def save_comprehensive_report(
 async def main(request_json: Dict[str, Any]) -> Dict[str, Any]:
     """메인 비동기 로직"""
     # 요청 데이터 추출 및 검증
+    document_id = request_json.get("_id")  # MongoDB Document ID
     session_id = request_json.get("session_id")
     user_id = request_json.get("user_id")
+    start_time = request_json.get("start_time")
+    end_time = request_json.get("end_time")
     conversation = request_json.get("conversation")
     audio_url = request_json.get("audio_recording_url")
 
@@ -713,11 +772,16 @@ async def main(request_json: Dict[str, Any]) -> Dict[str, Any]:
     }
 
     db_pool = None
+    mongodb_client = None
     http_session = None
     
     try:
         # DB 커넥션 풀 생성
         db_pool = await create_db_pool()
+        
+        # MongoDB 클라이언트 생성
+        if MONGODB_URI:
+            mongodb_client = await create_mongodb_client()
         
         # HTTP 세션 생성
         timeout = aiohttp.ClientTimeout(total=60)
@@ -796,6 +860,29 @@ async def main(request_json: Dict[str, Any]) -> Dict[str, Any]:
                 else:
                     results_summary["db_saves_completed"].append(name)
 
+        # MongoDB에 분석 리포트 저장 (title과 content 추가)
+        if mongodb_client and document_id and not isinstance(summary_result, Exception):
+            try:
+                title = summary_result.get('title', '대화 기록')
+                content = summary_result.get('summary', '대화 내용이 분석되었습니다.')
+                
+                mongodb_save_result = await save_analysis_report_to_mongodb(
+                    mongodb_client, 
+                    document_id,
+                    title, 
+                    content
+                )
+                
+                if mongodb_save_result:
+                    results_summary["db_saves_completed"].append("mongodb_analysis_report")
+                    print(f"Analysis report saved to MongoDB document: {document_id}")
+                else:
+                    results_summary["db_saves_failed"].append("mongodb_analysis_report")
+                    
+            except Exception as e:
+                print(f"MongoDB analysis report save failed: {e}")
+                results_summary["db_saves_failed"].append("mongodb_analysis_report")
+
         print(f"Processing completed for session {session_id}")
         return results_summary
 
@@ -812,6 +899,9 @@ async def main(request_json: Dict[str, Any]) -> Dict[str, Any]:
         if db_pool:
             db_pool.close()
             await db_pool.wait_closed()
+            
+        if mongodb_client:
+            mongodb_client.close()
 
 
 # --- Cloud Function Entry Point ---

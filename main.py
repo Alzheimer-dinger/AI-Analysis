@@ -580,12 +580,23 @@ async def save_analysis_report_to_mongodb(
 ) -> bool:
     """MongoDB에 분석 리포트를 저장합니다. _id 기준으로 문서를 찾아서 title과 content 필드를 추가합니다."""
     try:
+        from bson import ObjectId
+        
         db = mongodb_client[MONGODB_DB_NAME]
         collection = db.conversation_sessions
         
+        # ObjectId 변환 시도
+        try:
+            object_id = ObjectId(document_id)
+            query_id = object_id
+        except Exception:
+            # ObjectId 변환 실패 시 문자열 그대로 사용
+            query_id = document_id
+            print(f"Using document_id as string: {document_id}")
+        
         # _id 기준으로 문서 업데이트
         result = await collection.update_one(
-            {"_id": document_id},
+            {"_id": query_id},
             {
                 "$set": {
                     "title": title,
